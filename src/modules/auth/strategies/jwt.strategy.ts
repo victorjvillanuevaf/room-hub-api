@@ -20,13 +20,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: config.get<string>('JWT_SECRET') as string,
+      secretOrKey: config.get<string>('JWT_ACCESS_SECRET') as string,
     });
   }
 
   async validate(payload: JwtPayload): Promise<User> {
     const user = await this.usersService.findById(payload.sub);
-    if (!user) throw new UnauthorizedException();
+    if (!user) {
+      throw new UnauthorizedException({
+        message: 'User not found',
+        code: 'USER_NOT_FOUND',
+      });
+    }
     return user;
   }
 }

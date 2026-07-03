@@ -3,8 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from '../entities/user.entity';
-import { CreateUserRequest, PaginatedUsersResponse } from '../types/user.type';
+import { CreateUserRequest, SafeUser } from '../types/user.type';
 import { toSafeUser } from '../utils/safe-user';
+import { PaginatedResponse } from 'src/common/types/paginated-response';
+import { GetUserDto } from '../dto/get-user.dto';
 
 @Injectable()
 export class UsersService {
@@ -34,12 +36,12 @@ export class UsersService {
     return this.repo.findOne({ where: { id } });
   }
 
-  async findAllPaginated(
-    page: number,
-    limit: number,
-    sortBy: keyof User = 'createdAt',
-    sortOrder: 'ASC' | 'DESC' = 'DESC',
-  ): Promise<PaginatedUsersResponse> {
+  async findAllPaginated({
+    page,
+    limit,
+    sortBy,
+    sortOrder,
+  }: GetUserDto): Promise<PaginatedResponse<SafeUser>> {
     const normalizedPage = Math.max(page, 1);
     const normalizedLimit = Math.min(Math.max(limit, 1), 100);
 

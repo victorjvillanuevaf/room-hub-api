@@ -9,11 +9,3 @@ export type CreateUserRequest = {
 };
 
 export type SafeUser = Omit<User, 'password'>;
-
-export type PaginatedUsersResponse = {
-  data: SafeUser[];
-  page: number;
-  limit: number;
-  total: number;
-  totalPages: number;
-};

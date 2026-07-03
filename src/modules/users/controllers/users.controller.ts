@@ -5,6 +5,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -15,7 +16,7 @@ import { CreateUserWithRoleDto } from '../dto/create-user-with-role.dto';
 import { UsersService } from '../services/users.service';
 import { UserRole } from '../enum/user.enum';
 import { toSafeUser } from '../utils/safe-user';
-import { User } from '../entities/user.entity';
+import { GetUserDto } from '../dto/get-user.dto';
 
 @ApiTags('users')
 @ApiBearerAuth()
@@ -51,13 +52,8 @@ export class UsersController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Get all users with pagination (admin only)' })
-  async findAllPaginated(
-    page: number,
-    limit: number,
-    sortBy: keyof User = 'createdAt',
-    sortOrder: 'ASC' | 'DESC' = 'DESC',
-  ) {
-    return this.usersService.findAllPaginated(page, limit, sortBy, sortOrder);
+  async findAllPaginated(@Query() dto: GetUserDto) {
+    return this.usersService.findAllPaginated(dto);
   }
 
   @Post()

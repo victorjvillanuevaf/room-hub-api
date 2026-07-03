@@ -17,6 +17,16 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: room-hub-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+
   seed:
     image: node:20-alpine
     container_name: room-hub-seed
@@ -28,6 +38,7 @@ services:
       - .env
     environment:
       DB_HOST: postgres
+      REDIS_HOST: redis
     volumes:
       - ./:/app
     command: sh -c "npm ci && npm run seed"
@@ -44,6 +55,7 @@ services:
       - .env
     environment:
       DB_HOST: postgres
+      REDIS_HOST: redis
     volumes:
       - ./:/app
     command: sh -c "npm ci && npm run migration:run"
@@ -51,3 +63,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
