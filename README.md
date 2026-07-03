@@ -17,12 +17,20 @@ Backend API built with NestJS for authentication, buildings/rooms management and
 
 - Node.js 20+
 - npm 10+
+- Docker + Docker Compose v2 (recommended — runs PostgreSQL and Redis for you, see below)
+
+Only needed if you run PostgreSQL/Redis natively instead of via Docker:
+
 - PostgreSQL 16+
 - Redis 7+
 
 ## Environment variables
 
-Use `.env.example` as a starting point, but note the API currently also relies on the following variables:
+Copy `.env.example` to `.env` and adjust as needed:
+
+```bash
+cp .env.example .env
+```
 
 ```env
 # Application
@@ -36,18 +44,18 @@ DB_USERNAME=postgres
 DB_PASSWORD=postgres
 DB_NAME=room_hub
 
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-
 # JWT
 JWT_ACCESS_SECRET=change-me-access
 JWT_REFRESH_SECRET=change-me-refresh
-JWT_ACCESS_EXPIRES_IN=15m
+JWT_ACCESS_EXPIRES_IN=30m
 JWT_REFRESH_EXPIRES_IN=7d
 
 # Client (used for CORS and WebSocket origin)
 CLIENT_URL=http://localhost:5173
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
 
 # Rate limiting
 THROTTLE_TTL=60000
@@ -55,6 +63,8 @@ THROTTLE_LIMIT=10
 
 # Reservations
 CANCELLATION_WINDOW_MINUTES=60
+
+# Operating hours
 OPERATING_START=09:00
 OPERATING_END=18:00
 ```
