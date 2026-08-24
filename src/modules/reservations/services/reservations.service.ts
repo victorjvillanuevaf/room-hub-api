@@ -23,11 +23,10 @@ import { ReservationsGateway } from '../gateway/reservation.gateway';
 import { ReservationGroupedByDay } from 'src/modules/rooms/types/room-details.type';
 import { getLocalDayBoundsInUTC } from 'src/modules/rooms/utils/get-localdates-utc';
 import { ConfigService } from '@nestjs/config';
-
-type ReservationResponse = Omit<Reservation, 'user'> & {
-  room: Room & { building: Room['building'] };
-  user: Omit<User, 'password'>;
-};
+import {
+  ReservationByRoomResponse,
+  ReservationByUserResponse,
+} from '../types/reservation-response.type';
 
 type PostgresDriverError = {
   code?: string;
@@ -47,9 +46,15 @@ export class ReservationsService {
   async create(
     user: User,
     dto: CreateReservationDto,
-  ): Promise<ReservationResponse> {
+  ): Promise<ReservationByRoomResponse> {
     const startAt = DateTime.fromISO(dto.startAt, { setZone: true });
     const endAt = DateTime.fromISO(dto.endAt, { setZone: true });
+
+    const maxAllowedDateDay = DateTime.now()
+      .plus({
+        days: this.getMaxAllowedReservationDaysAhead(),
+      })
+      .startOf('day');
 
     if (!startAt.isValid || !endAt.isValid) {
       throw new BadRequestException('Invalid reservation date range');
@@ -57,6 +62,12 @@ export class ReservationsService {
 
     if (startAt.toMillis() >= endAt.toMillis()) {
       throw new BadRequestException('startAt must be earlier than endAt');
+    }
+
+    if (startAt > maxAllowedDateDay || endAt > maxAllowedDateDay) {
+      throw new BadRequestException(
+        'Reservation date exceeds the maximum allowed date',
+      );
     }
 
     const room = await this.roomRepo.findOne({
@@ -167,7 +178,7 @@ export class ReservationsService {
     limit,
     sortOrder = 'DESC',
   }: FindReservationByUserDto): Promise<
-    PaginatedResponse<ReservationResponse>
+    PaginatedResponse<ReservationByUserResponse>
   > {
     const normalizedPage = Math.max(page, 1);
     const normalizedLimit = Math.min(Math.max(limit, 1), 100);
@@ -199,14 +210,19 @@ export class ReservationsService {
     limit,
     sortOrder = 'DESC',
   }: FindReservationByRoomDto): Promise<
-    PaginatedResponse<ReservationResponse>
+    PaginatedResponse<ReservationByRoomResponse>
   > {
     const normalizedPage = Math.max(page, 1);
     const normalizedLimit = Math.min(Math.max(limit, 1), 100);
 
     const [reservations, total] = await this.reservationRepo.findAndCount({
       where: { roomId },
-      relations: { user: true },
+      relations: {
+        room: {
+          building: true,
+        },
+        user: true,
+      },
       order: { startAt: sortOrder },
       take: normalizedLimit,
       skip: (normalizedPage - 1) * normalizedLimit,
@@ -229,6 +245,11 @@ export class ReservationsService {
       start: this.config.get<string>('OPERATING_START', '09:00'),
       end: this.config.get<string>('OPERATING_END', '18:00'),
     };
+  }
+
+  getMaxAllowedReservationDaysAhead(): number {
+    const value = this.config.get<number>('MAX_ALLOWED_DAYS_AHEAD', 80);
+    return Number(value);
   }
 
   async getReservationGroupedByDay(

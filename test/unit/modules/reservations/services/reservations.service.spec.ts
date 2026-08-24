@@ -510,7 +510,7 @@ describe('ReservationsService', () => {
       );
     });
 
-    it('returns pagination metadata and passes through the room-loaded reservations', async () => {
+    it('returns pagination metadata and keeps the user-scoped response without a user relation', async () => {
       const reservations = [buildReservation(), buildReservation({ id: 'r2' })];
       (reservationRepo.findAndCount as jest.Mock).mockResolvedValue([
         reservations,
@@ -562,7 +562,10 @@ describe('ReservationsService', () => {
 
       expect(reservationRepo.findAndCount).toHaveBeenCalledWith({
         where: { roomId: 'room-1' },
-        relations: { user: true },
+        relations: {
+          room: { building: true },
+          user: true,
+        },
         order: { startAt: 'DESC' },
         take: 10,
         skip: 0,
