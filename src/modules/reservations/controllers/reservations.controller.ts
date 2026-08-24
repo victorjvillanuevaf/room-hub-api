@@ -69,6 +69,18 @@ export class ReservationsController {
     return this.reservationsService.getOperatingHours();
   }
 
+  @Get('max-allowed-days-ahead')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get the maximum allowed days ahead for reservations',
+  })
+  getMaxAllowedDaysAhead() {
+    return {
+      maxAllowedDaysAhead:
+        this.reservationsService.getMaxAllowedReservationDaysAhead(),
+    };
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Create a reservation for the authenticated user' })

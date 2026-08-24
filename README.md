@@ -162,6 +162,7 @@ Most endpoints require a Bearer access token (`JwtAuthGuard`); admin-only endpoi
 - Migrations live in `src/database/migrations` and run automatically on boot (`migrationsRun: true`) and via `docker compose up -d`.
 - `npm run migration:run` / `npm run migration:revert` run migrations manually using `src/database/data-source.ts`.
 - `npm run seed` seeds buildings and rooms (`src/seeds/seed.ts`).
+- Overlap prevention for reservations is documented in `docs/no-solapamiento-reservaciones.md`.
 
 ## Scripts
 
