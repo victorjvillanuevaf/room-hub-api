@@ -20,7 +20,7 @@ import {
   FindReservationByUserDto,
 } from '../dto/find-reservation.dto';
 import { UserRole } from 'src/modules/users/enum/user.enum';
-// import { sleep } from 'src/common/utils/sleep';
+import { sleep } from 'src/common/utils/sleep';
 
 type AuthenticatedRequest = Request & {
   user: User;
@@ -88,7 +88,7 @@ export class ReservationsController {
     @Req() request: AuthenticatedRequest,
     @Body() dto: CreateReservationDto,
   ) {
-    // await sleep(2000);
+    await sleep(2000);
     // throw new Error('Simulated error for testing purposes');
     return this.reservationsService.create(request.user, dto);
   }
@@ -97,8 +97,7 @@ export class ReservationsController {
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Cancel a reservation by id' })
   async cancel(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
-    // await sleep(2000);
-    // throw new Error('Simulated error for testing purposes');
+    await sleep(2000);
     return this.reservationsService.cancel(id, request.user);
   }
 }

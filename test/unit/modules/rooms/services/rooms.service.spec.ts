@@ -346,40 +346,32 @@ describe('RoomsService', () => {
       ).rejects.toThrow('No file provided');
     });
 
-    it('throws BadRequestException for a disallowed mimetype', async () => {
+    it('accepts a file even when the controller has already validated its mimetype', async () => {
       const room = buildRoom();
       roomRepo.findOne!.mockResolvedValue(room);
+      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
 
-      await expect(
-        service.uploadImage('room-1', {
-          ...validFile,
-          mimetype: 'application/pdf',
-        }),
-      ).rejects.toThrow(BadRequestException);
-      await expect(
-        service.uploadImage('room-1', {
-          ...validFile,
-          mimetype: 'application/pdf',
-        }),
-      ).rejects.toThrow('Only PNG, JPEG, and JPG files are allowed');
+      const result = await service.uploadImage('room-1', {
+        ...validFile,
+        mimetype: 'application/pdf',
+      });
+
+      expect(result.imageUrl).toMatch(/^\/uploads\/room_images\/room-1_/);
+      expect(roomRepo.save).toHaveBeenCalled();
     });
 
-    it('throws BadRequestException when the file exceeds 5MB', async () => {
+    it('accepts a file even when the controller has already validated its size', async () => {
       const room = buildRoom();
       roomRepo.findOne!.mockResolvedValue(room);
+      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
 
-      await expect(
-        service.uploadImage('room-1', {
-          ...validFile,
-          size: 5 * 1024 * 1024 + 1,
-        }),
-      ).rejects.toThrow(BadRequestException);
-      await expect(
-        service.uploadImage('room-1', {
-          ...validFile,
-          size: 5 * 1024 * 1024 + 1,
-        }),
-      ).rejects.toThrow('File size must not exceed 5MB');
+      const result = await service.uploadImage('room-1', {
+        ...validFile,
+        size: 5 * 1024 * 1024 + 1,
+      });
+
+      expect(result.imageUrl).toMatch(/^\/uploads\/room_images\/room-1_/);
+      expect(roomRepo.save).toHaveBeenCalled();
     });
 
     it('creates the uploads directory when it does not exist', async () => {

@@ -1,9 +1,12 @@
 import {
   Body,
   Controller,
+  FileTypeValidator,
   Get,
   Headers,
+  MaxFileSizeValidator,
   Param,
+  ParseFilePipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -90,13 +93,15 @@ export class RoomsController {
   })
   async uploadImage(
     @Param('id') roomId: string,
-    @UploadedFile()
-    file: {
-      originalname: string;
-      mimetype: string;
-      size: number;
-      buffer: Buffer;
-    },
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new FileTypeValidator({ fileType: /image\/(jpg|jpeg|png)$/i }),
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
   ): Promise<Room> {
     await sleep(2000);
     // throw new Error('Simulated error for testing purposes');

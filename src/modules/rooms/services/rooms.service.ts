@@ -1,10 +1,12 @@
+import 'multer';
 import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
+import { mkdir, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { MoreThanOrEqual, Repository } from 'typeorm';
 
@@ -23,6 +25,7 @@ export class RoomsService {
   constructor(
     @InjectRepository(Room)
     private readonly roomRepo: Repository<Room>,
+    private readonly logger: Logger,
     private readonly reservationService: ReservationsService,
   ) {}
 
@@ -93,68 +96,63 @@ export class RoomsService {
     });
   }
 
-  async uploadImage(
-    roomId: string,
-    file: {
-      originalname: string;
-      mimetype: string;
-      size: number;
-      buffer: Buffer;
-    },
-  ): Promise<Room> {
+  async uploadImage(roomId: string, file: Express.Multer.File): Promise<Room> {
     const room = await this.findById(roomId);
 
     if (!file) {
       throw new BadRequestException('No file provided');
     }
 
-    const allowedMimes = ['image/png', 'image/jpeg', 'image/jpg'];
-    if (!allowedMimes.includes(file.mimetype)) {
-      throw new BadRequestException(
-        'Only PNG, JPEG, and JPG files are allowed',
-      );
-    }
-
-    const maxSizeBytes = 5 * 1024 * 1024; // 5MB
-    if (file.size > maxSizeBytes) {
-      throw new BadRequestException('File size must not exceed 5MB');
-    }
-
     const uploadsDir = join(process.cwd(), 'uploads', 'room_images');
-    if (!existsSync(uploadsDir)) {
-      mkdirSync(uploadsDir, { recursive: true });
-    }
+    await mkdir(uploadsDir, { recursive: true }); // no falla si ya existe, no hace falta existsSync
 
     const timestamp = Date.now();
     const sanitizedFileName = `${roomId}_${timestamp}_${file.originalname.toLowerCase().replace(/[^a-z0-9.]/g, '_')}`;
     const filePath = join(uploadsDir, sanitizedFileName);
+    const previousImageUrl = room.imageUrl;
 
     try {
-      writeFileSync(filePath, file.buffer);
+      await writeFile(filePath, file.buffer);
+    } catch (writeError) {
+      this.logger.error(
+        `Failed to write image file at ${filePath}`,
+        writeError,
+      );
+      throw new BadRequestException('Failed to save image');
+    }
 
-      const imageUrl = `/uploads/room_images/${sanitizedFileName}`;
+    room.imageUrl = `/uploads/room_images/${sanitizedFileName}`;
 
-      if (room.imageUrl && room.imageUrl.startsWith('/uploads/room_images/')) {
-        const oldFilePath = join(process.cwd(), room.imageUrl);
+    try {
+      const savedRoom = await this.roomRepo.save(room);
+
+      if (previousImageUrl?.startsWith('/uploads/room_images/')) {
+        const oldFilePath = join(process.cwd(), previousImageUrl);
         try {
-          if (existsSync(oldFilePath)) {
-            unlinkSync(oldFilePath);
+          await unlink(oldFilePath);
+        } catch (deleteError: unknown) {
+          if ((deleteError as { code?: string })?.code !== 'ENOENT') {
+            this.logger.warn(
+              `Could not delete old image file at ${oldFilePath}`,
+              deleteError,
+            );
           }
-        } catch (deleteError) {
-          console.warn('Could not delete old image file:', deleteError);
         }
       }
 
-      room.imageUrl = imageUrl;
-      return this.roomRepo.save(room);
-    } catch {
-      if (existsSync(filePath)) {
-        try {
-          unlinkSync(filePath);
-        } catch (unlinkError) {
-          console.error('Error deleting file on failure:', unlinkError);
+      return savedRoom;
+    } catch (saveError) {
+      try {
+        await unlink(filePath);
+      } catch (unlinkError: unknown) {
+        if ((unlinkError as { code?: string })?.code !== 'ENOENT') {
+          this.logger.error(
+            `Error deleting file on failure: ${filePath}`,
+            unlinkError,
+          );
         }
       }
+      this.logger.error('Failed to persist room after image upload', saveError);
       throw new BadRequestException('Failed to save image');
     }
   }
