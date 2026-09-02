@@ -1,26 +1,18 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { Repository } from 'typeorm';
 import { DateTime } from 'luxon';
 
 import { RoomsService } from 'src/modules/rooms/services/rooms.service';
 import { Room } from 'src/modules/rooms/entities/room.entity';
 import { ReservationsService } from 'src/modules/reservations/services/reservations.service';
+import { S3Service } from 'src/modules/s3/services/s3.service';
 import { FindAllRoomsDto } from 'src/modules/rooms/dto/filters.dto';
 import { UpdateRoomDto } from 'src/modules/rooms/dto/update-room.dto';
 import { calculateAvailability } from 'src/modules/rooms/utils/calculate-availability';
 import { getReservationStatus } from 'src/modules/rooms/utils/get-reservation-status';
 
-jest.mock('fs');
 jest.mock('src/modules/rooms/utils/calculate-availability');
 jest.mock('src/modules/rooms/utils/get-reservation-status');
-
-const mockedExistsSync = existsSync as jest.MockedFunction<typeof existsSync>;
-const mockedMkdirSync = mkdirSync as jest.MockedFunction<typeof mkdirSync>;
-const mockedWriteFileSync = writeFileSync as jest.MockedFunction<
-  typeof writeFileSync
->;
-const mockedUnlinkSync = unlinkSync as jest.MockedFunction<typeof unlinkSync>;
 const mockedCalculateAvailability =
   calculateAvailability as jest.MockedFunction<typeof calculateAvailability>;
 const mockedGetReservationStatus = getReservationStatus as jest.MockedFunction<
@@ -30,6 +22,8 @@ const mockedGetReservationStatus = getReservationStatus as jest.MockedFunction<
 describe('RoomsService', () => {
   let service: RoomsService;
   let roomRepo: Partial<Record<keyof Repository<Room>, jest.Mock>>;
+  let logger: { warn: jest.Mock };
+  let s3Service: Partial<Record<keyof S3Service, jest.Mock>>;
   let reservationService: Partial<Record<keyof ReservationsService, jest.Mock>>;
 
   const buildRoom = (overrides: Partial<Room> = {}): Room =>
@@ -56,6 +50,18 @@ describe('RoomsService', () => {
       find: jest.fn(),
     };
 
+    logger = {
+      warn: jest.fn(),
+    };
+
+    s3Service = {
+      getUploadUrl: jest.fn(),
+      fileExists: jest.fn(),
+      getPublicUrl: jest.fn(),
+      deleteFile: jest.fn(),
+      extractKeyFromUrl: jest.fn(),
+    };
+
     reservationService = {
       getReservationGroupedByDay: jest.fn(),
       getOperatingHours: jest
@@ -65,6 +71,8 @@ describe('RoomsService', () => {
 
     service = new RoomsService(
       roomRepo as unknown as Repository<Room>,
+      logger as never,
+      s3Service as S3Service,
       reservationService as unknown as ReservationsService,
     );
   });
@@ -317,218 +325,110 @@ describe('RoomsService', () => {
     });
   });
 
-  describe('uploadImage', () => {
-    const validFile = {
-      originalname: 'Photo Name.png',
-      mimetype: 'image/png',
-      size: 1024,
-      buffer: Buffer.from('image-data'),
-    };
-
-    it('throws NotFoundException from findById when the room does not exist', async () => {
+  describe('getUploadUrl', () => {
+    it('throws NotFoundException when room does not exist', async () => {
       roomRepo.findOne!.mockResolvedValue(null);
 
-      await expect(service.uploadImage('missing', validFile)).rejects.toThrow(
-        NotFoundException,
-      );
-      expect(mockedWriteFileSync).not.toHaveBeenCalled();
+      await expect(
+        service.getUploadUrl('missing', 'image/png'),
+      ).rejects.toThrow(NotFoundException);
+      expect(s3Service.getUploadUrl).not.toHaveBeenCalled();
     });
 
-    it('throws BadRequestException when no file is provided', async () => {
-      const room = buildRoom();
-      roomRepo.findOne!.mockResolvedValue(room);
+    it('builds key and delegates to s3Service', async () => {
+      roomRepo.findOne!.mockResolvedValue(buildRoom());
+      s3Service.getUploadUrl!.mockResolvedValue('https://signed-url');
+      jest.spyOn(Date, 'now').mockReturnValue(1718300000000);
+
+      const result = await service.getUploadUrl('room-1', 'image/jpeg');
+
+      expect(s3Service.getUploadUrl).toHaveBeenCalledWith(
+        'room_images/room-1_1718300000000.jpeg',
+        'image/jpeg',
+      );
+      expect(result).toEqual({
+        uploadUrl: 'https://signed-url',
+        key: 'room_images/room-1_1718300000000.jpeg',
+      });
+    });
+  });
+
+  describe('confirmImageUpload', () => {
+    it('throws when key does not match room prefix', async () => {
+      roomRepo.findOne!.mockResolvedValue(buildRoom());
 
       await expect(
-        service.uploadImage('room-1', undefined as unknown as typeof validFile),
+        service.confirmImageUpload('room-1', 'room_images/other_123.png'),
       ).rejects.toThrow(BadRequestException);
-      await expect(
-        service.uploadImage('room-1', undefined as unknown as typeof validFile),
-      ).rejects.toThrow('No file provided');
-    });
-
-    it('accepts a file even when the controller has already validated its mimetype', async () => {
-      const room = buildRoom();
-      roomRepo.findOne!.mockResolvedValue(room);
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      const result = await service.uploadImage('room-1', {
-        ...validFile,
-        mimetype: 'application/pdf',
-      });
-
-      expect(result.imageUrl).toMatch(/^\/uploads\/room_images\/room-1_/);
-      expect(roomRepo.save).toHaveBeenCalled();
-    });
-
-    it('accepts a file even when the controller has already validated its size', async () => {
-      const room = buildRoom();
-      roomRepo.findOne!.mockResolvedValue(room);
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      const result = await service.uploadImage('room-1', {
-        ...validFile,
-        size: 5 * 1024 * 1024 + 1,
-      });
-
-      expect(result.imageUrl).toMatch(/^\/uploads\/room_images\/room-1_/);
-      expect(roomRepo.save).toHaveBeenCalled();
-    });
-
-    it('creates the uploads directory when it does not exist', async () => {
-      const room = buildRoom();
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedExistsSync.mockReturnValue(false);
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      await service.uploadImage('room-1', validFile);
-
-      expect(mockedMkdirSync).toHaveBeenCalledWith(
-        expect.stringContaining('room_images'),
-        { recursive: true },
-      );
-    });
-
-    it('does not create the uploads directory when it already exists', async () => {
-      const room = buildRoom();
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedExistsSync.mockReturnValue(false);
-      // First call checks uploadsDir existence -> true (skip mkdir),
-      // subsequent existsSync calls (old file check) default to false.
-      mockedExistsSync.mockImplementation(
-        (path) => typeof path === 'string' && path.endsWith('room_images'),
-      );
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      await service.uploadImage('room-1', validFile);
-
-      expect(mockedMkdirSync).not.toHaveBeenCalled();
-    });
-
-    it('writes the file, sets a sanitized imageUrl, and saves the room', async () => {
-      const room = buildRoom({ imageUrl: null });
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedExistsSync.mockReturnValue(true);
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      const result = await service.uploadImage('room-1', validFile);
-
-      expect(mockedWriteFileSync).toHaveBeenCalledWith(
-        expect.stringContaining('room-1_'),
-        validFile.buffer,
-      );
-      expect(result.imageUrl).toMatch(
-        /^\/uploads\/room_images\/room-1_\d+_photo_name\.png$/,
-      );
-      expect(roomRepo.save).toHaveBeenCalledWith(
-        expect.objectContaining({ imageUrl: result.imageUrl }),
-      );
-    });
-
-    it('deletes the old image file when the room previously had one under room_images', async () => {
-      const room = buildRoom({
-        imageUrl: '/uploads/room_images/old-image.png',
-      });
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedExistsSync.mockReturnValue(true);
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      await service.uploadImage('room-1', validFile);
-
-      expect(mockedUnlinkSync).toHaveBeenCalledWith(
-        expect.stringContaining('old-image.png'),
-      );
-    });
-
-    it('does not attempt to delete the old file when it does not exist on disk', async () => {
-      const room = buildRoom({
-        imageUrl: '/uploads/room_images/old-image.png',
-      });
-      roomRepo.findOne!.mockResolvedValue(room);
-      // uploadsDir exists (true) but old file existsSync returns false.
-      mockedExistsSync.mockImplementation(
-        (path) => typeof path === 'string' && path.endsWith('room_images'),
-      );
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      await service.uploadImage('room-1', validFile);
-
-      expect(mockedUnlinkSync).not.toHaveBeenCalled();
-    });
-
-    it('does not attempt to delete an old file outside of room_images', async () => {
-      const room = buildRoom({ imageUrl: '/some/other/path/image.png' });
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedExistsSync.mockReturnValue(true);
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      await service.uploadImage('room-1', validFile);
-
-      expect(mockedUnlinkSync).not.toHaveBeenCalled();
-    });
-
-    it('swallows errors when deleting the old image fails, and still saves the new one', async () => {
-      const room = buildRoom({
-        imageUrl: '/uploads/room_images/old-image.png',
-      });
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedExistsSync.mockReturnValue(true);
-      mockedUnlinkSync.mockImplementationOnce(() => {
-        throw new Error('cannot delete');
-      });
-      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
-
-      const result = await service.uploadImage('room-1', validFile);
-
-      expect(result.imageUrl).toBeDefined();
-      expect(roomRepo.save).toHaveBeenCalled();
-    });
-
-    it('cleans up the partially written file and throws BadRequestException when writeFileSync fails', async () => {
-      const room = buildRoom();
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedExistsSync.mockReturnValue(true);
-      mockedWriteFileSync.mockImplementation(() => {
-        throw new Error('disk full');
-      });
-
-      await expect(service.uploadImage('room-1', validFile)).rejects.toThrow(
-        BadRequestException,
-      );
-      await expect(service.uploadImage('room-1', validFile)).rejects.toThrow(
-        'Failed to save image',
-      );
-      expect(mockedUnlinkSync).toHaveBeenCalled();
       expect(roomRepo.save).not.toHaveBeenCalled();
     });
 
-    it('does not throw when cleanup unlink also fails after a write failure', async () => {
-      const room = buildRoom();
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedExistsSync.mockReturnValue(true);
-      mockedWriteFileSync.mockImplementation(() => {
-        throw new Error('disk full');
-      });
-      mockedUnlinkSync.mockImplementation(() => {
-        throw new Error('cannot unlink');
-      });
+    it('throws when object is missing in S3', async () => {
+      roomRepo.findOne!.mockResolvedValue(buildRoom());
+      s3Service.fileExists!.mockResolvedValue(false);
 
-      await expect(service.uploadImage('room-1', validFile)).rejects.toThrow(
-        'Failed to save image',
+      await expect(
+        service.confirmImageUpload('room-1', 'room_images/room-1_123.png'),
+      ).rejects.toThrow('Image not found in storage');
+      expect(roomRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('saves room image using public URL', async () => {
+      const room = buildRoom({ imageUrl: null });
+      roomRepo.findOne!.mockResolvedValue(room);
+      s3Service.fileExists!.mockResolvedValue(true);
+      s3Service.getPublicUrl!.mockReturnValue(
+        'https://bucket.s3.us-east-1.amazonaws.com/room_images/room-1_123.png',
+      );
+      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
+
+      const result = await service.confirmImageUpload(
+        'room-1',
+        'room_images/room-1_123.png',
+      );
+
+      expect(roomRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          imageUrl:
+            'https://bucket.s3.us-east-1.amazonaws.com/room_images/room-1_123.png',
+        }),
+      );
+      expect(result.imageUrl).toBe(
+        'https://bucket.s3.us-east-1.amazonaws.com/room_images/room-1_123.png',
       );
     });
 
-    it('does not try to clean up the file when it was never written', async () => {
-      const room = buildRoom();
-      roomRepo.findOne!.mockResolvedValue(room);
-      mockedWriteFileSync.mockImplementation(() => {
-        throw new Error('disk full');
+    it('deletes previous image after saving the new one', async () => {
+      const room = buildRoom({
+        imageUrl: 'https://bucket.s3/room_images/old.png',
       });
-      mockedExistsSync.mockReturnValue(false);
-
-      await expect(service.uploadImage('room-1', validFile)).rejects.toThrow(
-        BadRequestException,
+      roomRepo.findOne!.mockResolvedValue(room);
+      s3Service.fileExists!.mockResolvedValue(true);
+      s3Service.getPublicUrl!.mockReturnValue(
+        'https://bucket.s3/room_images/new.png',
       );
-      expect(mockedUnlinkSync).not.toHaveBeenCalled();
+      s3Service.extractKeyFromUrl!.mockReturnValue('room_images/old.png');
+      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
+
+      await service.confirmImageUpload('room-1', 'room_images/room-1_123.png');
+
+      expect(s3Service.extractKeyFromUrl).toHaveBeenCalledWith(
+        'https://bucket.s3/room_images/old.png',
+      );
+      expect(s3Service.deleteFile).toHaveBeenCalledWith('room_images/old.png');
+    });
+
+    it('does not delete previous image when it was empty', async () => {
+      roomRepo.findOne!.mockResolvedValue(buildRoom({ imageUrl: null }));
+      s3Service.fileExists!.mockResolvedValue(true);
+      s3Service.getPublicUrl!.mockReturnValue(
+        'https://bucket.s3/room_images/new.png',
+      );
+      roomRepo.save!.mockImplementation((r) => Promise.resolve(r));
+
+      await service.confirmImageUpload('room-1', 'room_images/room-1_123.png');
+
+      expect(s3Service.deleteFile).not.toHaveBeenCalled();
     });
   });
 

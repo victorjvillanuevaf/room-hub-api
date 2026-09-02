@@ -16,13 +16,6 @@ const buildingsToSeed: SeedBuilding[] = [
   { name: 'Edificio C', address: 'Av. 28 de Julio 674 - Miraflores' },
 ];
 
-const imageUrls = [
-  '/uploads/room_images/360_F_420593502_kgqdM8Qa1wrMG5Pa7NiHOWW8eD5FqMYR.jpg',
-  '/uploads/room_images/modern-room-design-office_181624.jpg',
-  '/uploads/room_images/room-peace-3rt5jk.jpg',
-  '/uploads/room_images/room-space-1apl456.jpg',
-];
-
 const dataSource = new DataSource({
   type: 'postgres',
   host: process.env.DB_HOST,
@@ -36,17 +29,6 @@ const dataSource = new DataSource({
 
 function getCapacity(roomIndex: number): number {
   return roomIndex % 2 === 0 ? 25 : 15;
-}
-
-function getImageForRoom(
-  buildingName: string,
-  roomNumber: number,
-): string | null {
-  if (buildingName === 'Edificio A' && roomNumber === 1) return imageUrls[0];
-  if (buildingName === 'Edificio A' && roomNumber === 2) return imageUrls[1];
-  if (buildingName === 'Edificio B' && roomNumber === 1) return imageUrls[2];
-  if (buildingName === 'Edificio C' && roomNumber === 1) return imageUrls[3];
-  return null;
 }
 
 async function seedBuildingsAndRooms(): Promise<void> {
@@ -73,7 +55,7 @@ async function seedBuildingsAndRooms(): Promise<void> {
     for (let roomNumber = 1; roomNumber <= 15; roomNumber += 1) {
       const roomName = `Sala ${roomNumber}`;
       const capacity = getCapacity(roomNumber);
-      const imageUrl = getImageForRoom(building.name, roomNumber);
+      const imageUrl = null;
 
       let room = await roomRepo.findOne({
         where: {

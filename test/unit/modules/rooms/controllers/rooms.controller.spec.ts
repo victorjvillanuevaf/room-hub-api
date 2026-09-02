@@ -3,13 +3,9 @@ import { RoomsService } from 'src/modules/rooms/services/rooms.service';
 import { Room } from 'src/modules/rooms/entities/room.entity';
 import { FindAllRoomsDto } from 'src/modules/rooms/dto/filters.dto';
 import { UpdateRoomDto } from 'src/modules/rooms/dto/update-room.dto';
-import { sleep } from 'src/common/utils/sleep';
-
-jest.mock('src/common/utils/sleep', () => ({
-  sleep: jest.fn().mockResolvedValue(undefined),
-}));
-
-const mockedSleep = sleep as jest.MockedFunction<typeof sleep>;
+import { GetUploadUrlDto } from 'src/modules/rooms/dto/get-upload-url.dto';
+import { ConfirmImageUploadDto } from 'src/modules/rooms/dto/confirm-image-upload.dto';
+import { AllowedImageMimeType } from 'src/modules/rooms/types/allowed-image-mime.type';
 
 describe('RoomsController', () => {
   let controller: RoomsController;
@@ -37,7 +33,8 @@ describe('RoomsController', () => {
       getRoomAvailabilityDetails: jest.fn(),
       update: jest.fn(),
       findByBuildingId: jest.fn(),
-      uploadImage: jest.fn(),
+      getUploadUrl: jest.fn(),
+      confirmImageUpload: jest.fn(),
     };
 
     controller = new RoomsController(roomsService as unknown as RoomsService);
@@ -147,33 +144,67 @@ describe('RoomsController', () => {
     });
   });
 
-  describe('uploadImage', () => {
-    const file = {
-      originalname: 'photo.png',
-      mimetype: 'image/png',
-      size: 1024,
-      buffer: Buffer.from('image-data'),
-    };
+  describe('getUploadUrl', () => {
+    it('delegates to roomsService.getUploadUrl and returns its result', async () => {
+      const dto: GetUploadUrlDto = {
+        mimetype: AllowedImageMimeType.PNG,
+        size: 1024,
+      };
+      const payload = {
+        uploadUrl: 'https://signed-url',
+        key: 'room_images/room-1_123.png',
+      };
+      roomsService.getUploadUrl!.mockResolvedValue(payload);
 
-    it('sleeps before delegating to roomsService.uploadImage and returns its result', async () => {
-      const room = buildRoom({ imageUrl: '/uploads/room_images/photo.png' });
-      roomsService.uploadImage!.mockResolvedValue(room);
+      const result = await controller.getUploadUrl('room-1', dto);
 
-      const result = await controller.uploadImage('room-1', file);
+      expect(roomsService.getUploadUrl).toHaveBeenCalledWith(
+        'room-1',
+        'image/png',
+      );
+      expect(result).toEqual(payload);
+    });
 
-      expect(mockedSleep).toHaveBeenCalledWith(2000);
-      expect(roomsService.uploadImage).toHaveBeenCalledWith('room-1', file);
+    it('propagates errors thrown by roomsService.getUploadUrl', async () => {
+      const dto: GetUploadUrlDto = {
+        mimetype: AllowedImageMimeType.PNG,
+        size: 1024,
+      };
+      roomsService.getUploadUrl!.mockRejectedValue(new Error('Room not found'));
+
+      await expect(controller.getUploadUrl('room-1', dto)).rejects.toThrow(
+        'Room not found',
+      );
+    });
+  });
+
+  describe('confirmImageUpload', () => {
+    it('delegates to roomsService.confirmImageUpload and returns its result', async () => {
+      const dto: ConfirmImageUploadDto = { key: 'room_images/room-1_123.png' };
+      const room = buildRoom({
+        imageUrl:
+          'https://bucket.s3.us-east-1.amazonaws.com/room_images/room-1_123.png',
+      });
+      roomsService.confirmImageUpload!.mockResolvedValue(room);
+
+      const result = await controller.confirmImageUpload('room-1', dto);
+
+      expect(roomsService.confirmImageUpload).toHaveBeenCalledWith(
+        'room-1',
+        'room_images/room-1_123.png',
+      );
       expect(result).toEqual(room);
     });
 
-    it('propagates errors thrown by roomsService.uploadImage', async () => {
-      roomsService.uploadImage!.mockRejectedValue(
-        new Error('Failed to save image'),
+    it('propagates errors thrown by roomsService.confirmImageUpload', async () => {
+      const dto: ConfirmImageUploadDto = { key: 'invalid-key' };
+      roomsService.confirmImageUpload!.mockRejectedValue(
+        new Error('Invalid image key for this room'),
       );
 
-      await expect(controller.uploadImage('room-1', file)).rejects.toThrow(
-        'Failed to save image',
-      );
+      await expect(
+        controller.confirmImageUpload('room-1', dto),
+      ).rejects.toThrow('Invalid image key for this room');
     });
   });
 });

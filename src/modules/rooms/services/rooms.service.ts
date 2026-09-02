@@ -5,9 +5,8 @@ import {
   NotFoundException,
   Logger,
 } from '@nestjs/common';
+import { S3Service } from 'src/modules/s3/services/s3.service';
 import { InjectRepository } from '@nestjs/typeorm';
-import { mkdir, unlink, writeFile } from 'fs/promises';
-import { join } from 'path';
 import { MoreThanOrEqual, Repository } from 'typeorm';
 
 import { UpdateRoomDto } from '../dto/update-room.dto';
@@ -19,6 +18,7 @@ import { DateTime } from 'luxon';
 import { FindAllRoomsDto } from '../dto/filters.dto';
 import { getReservationStatus } from '../utils/get-reservation-status';
 import { PaginatedResponse } from 'src/common/types/paginated-response';
+import { AllowedImageMimeType } from '../types/allowed-image-mime.type';
 
 @Injectable()
 export class RoomsService {
@@ -26,6 +26,7 @@ export class RoomsService {
     @InjectRepository(Room)
     private readonly roomRepo: Repository<Room>,
     private readonly logger: Logger,
+    private readonly s3Service: S3Service,
     private readonly reservationService: ReservationsService,
   ) {}
 
@@ -96,67 +97,6 @@ export class RoomsService {
     });
   }
 
-  async uploadImage(roomId: string, file: Express.Multer.File): Promise<Room> {
-    const room = await this.findById(roomId);
-
-    if (!file) {
-      throw new BadRequestException('No file provided');
-    }
-
-    const uploadsDir = join(process.cwd(), 'uploads', 'room_images');
-    await mkdir(uploadsDir, { recursive: true }); // no falla si ya existe, no hace falta existsSync
-
-    const timestamp = Date.now();
-    const sanitizedFileName = `${roomId}_${timestamp}_${file.originalname.toLowerCase().replace(/[^a-z0-9.]/g, '_')}`;
-    const filePath = join(uploadsDir, sanitizedFileName);
-    const previousImageUrl = room.imageUrl;
-
-    try {
-      await writeFile(filePath, file.buffer);
-    } catch (writeError) {
-      this.logger.error(
-        `Failed to write image file at ${filePath}`,
-        writeError,
-      );
-      throw new BadRequestException('Failed to save image');
-    }
-
-    room.imageUrl = `/uploads/room_images/${sanitizedFileName}`;
-
-    try {
-      const savedRoom = await this.roomRepo.save(room);
-
-      if (previousImageUrl?.startsWith('/uploads/room_images/')) {
-        const oldFilePath = join(process.cwd(), previousImageUrl);
-        try {
-          await unlink(oldFilePath);
-        } catch (deleteError: unknown) {
-          if ((deleteError as { code?: string })?.code !== 'ENOENT') {
-            this.logger.warn(
-              `Could not delete old image file at ${oldFilePath}`,
-              deleteError,
-            );
-          }
-        }
-      }
-
-      return savedRoom;
-    } catch (saveError) {
-      try {
-        await unlink(filePath);
-      } catch (unlinkError: unknown) {
-        if ((unlinkError as { code?: string })?.code !== 'ENOENT') {
-          this.logger.error(
-            `Error deleting file on failure: ${filePath}`,
-            unlinkError,
-          );
-        }
-      }
-      this.logger.error('Failed to persist room after image upload', saveError);
-      throw new BadRequestException('Failed to save image');
-    }
-  }
-
   async getRoomAvailabilityDetails(
     roomId: string,
     timezone: string,
@@ -204,5 +144,45 @@ export class RoomsService {
       id: roomId,
       reservationsGroupedByDay,
     };
+  }
+
+  async getUploadUrl(
+    roomId: string,
+    mimetype: AllowedImageMimeType,
+  ): Promise<{ uploadUrl: string; key: string }> {
+    await this.findById(roomId);
+
+    const extension = mimetype.split('/')[1];
+    const key = `room_images/${roomId}_${Date.now()}.${extension}`;
+    const uploadUrl = await this.s3Service.getUploadUrl(key, mimetype);
+
+    return { uploadUrl, key };
+  }
+
+  async confirmImageUpload(roomId: string, key: string): Promise<Room> {
+    const room = await this.findById(roomId);
+
+    if (!key.startsWith(`room_images/${roomId}_`)) {
+      throw new BadRequestException('Invalid image key for this room');
+    }
+
+    if (!(await this.s3Service.fileExists(key))) {
+      throw new BadRequestException(
+        'Image not found in storage — upload may have failed',
+      );
+    }
+
+    const previousImageUrl = room.imageUrl;
+    room.imageUrl = this.s3Service.getPublicUrl(key);
+
+    const savedRoom = await this.roomRepo.save(room);
+
+    if (previousImageUrl) {
+      await this.s3Service.deleteFile(
+        this.s3Service.extractKeyFromUrl(previousImageUrl),
+      );
+    }
+
+    return savedRoom;
   }
 }

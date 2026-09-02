@@ -1,27 +1,16 @@
 import {
   Body,
   Controller,
-  FileTypeValidator,
   Get,
   Headers,
-  MaxFileSizeValidator,
   Param,
-  ParseFilePipe,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
-  UploadedFile,
   UseGuards,
-  UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import {
-  ApiBearerAuth,
-  ApiConsumes,
-  ApiOperation,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -32,7 +21,8 @@ import { RoomsService } from '../services/rooms.service';
 import { RoomAvailabilityDetails } from '../types/room-details.type';
 import { FindAllRoomsDto } from '../dto/filters.dto';
 import { PaginatedResponse } from 'src/common/types/paginated-response';
-import { sleep } from 'src/common/utils/sleep';
+import { GetUploadUrlDto } from '../dto/get-upload-url.dto';
+import { ConfirmImageUploadDto } from '../dto/confirm-image-upload.dto';
 
 @ApiTags('rooms')
 @ApiBearerAuth()
@@ -82,29 +72,27 @@ export class RoomsController {
     return this.roomsService.findByBuildingId(buildingId);
   }
 
-  @Post(':id/image')
+  @Post(':id/image/upload-url')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiConsumes('multipart/form-data')
   @ApiOperation({
-    summary: 'Upload room image (admin only)',
-    description: 'Upload a PNG, JPEG or JPG image (max 5MB)',
+    summary: 'Get a presigned upload URL for a room image (admin only)',
   })
-  async uploadImage(
+  getUploadUrl(
     @Param('id') roomId: string,
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new FileTypeValidator({ fileType: /image\/(jpg|jpeg|png)$/i }),
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
-        ],
-      }),
-    )
-    file: Express.Multer.File,
+    @Body() dto: GetUploadUrlDto,
+  ): Promise<{ uploadUrl: string; key: string }> {
+    return this.roomsService.getUploadUrl(roomId, dto.mimetype);
+  }
+
+  @Patch(':id/image')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Confirm a room image upload (admin only)' })
+  async confirmImageUpload(
+    @Param('id') roomId: string,
+    @Body() dto: ConfirmImageUploadDto,
   ): Promise<Room> {
-    await sleep(2000);
-    // throw new Error('Simulated error for testing purposes');
-    return this.roomsService.uploadImage(roomId, file);
+    return this.roomsService.confirmImageUpload(roomId, dto.key);
   }
 }
